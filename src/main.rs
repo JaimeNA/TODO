@@ -13,10 +13,10 @@ use std::{
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Corner, Direction, Layout},
+    layout::{Constraint, Corner, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState},
     Frame, Terminal,
 };
 
@@ -64,8 +64,14 @@ impl<T> StatefulList<T> {
         self.state.select(Some(i));
     }
 
-    fn unselect(&mut self) {
-        self.state.select(None);
+    fn remove_selected(&mut self) {
+
+        let i = self.state.selected();
+
+        if self.items.len() != 0 {
+            self.items.remove(i.unwrap());
+            self.state.select(Some(0));
+        }
     }
 }
 
@@ -77,14 +83,14 @@ struct App<'a> {
 
 // Utility functions
 
-fn read_file() -> io::Result<Vec<&str>> {
+fn read_file() -> io::Result<Vec<String>> {
     let data = match fs::read_to_string(FILENAME) {
         Ok(v) => v, 
         Err(e) => return Err(e),
     };
 
     if !data.is_empty() {
-        let list: Vec<&str> = serde_json::from_str(&data).unwrap();
+        let list: Vec<String> = serde_json::from_str(&data).unwrap();
 
         return Ok(list.clone());
     }
@@ -103,39 +109,44 @@ fn write_file(list: &Vec<String>) -> io::Result<()> {
 
 }
 
-fn print_list(list: &Vec<String>) {
-    println!("{} list: \n", "TODO".green());
-
-    let mut i: u32 = 1;
-
-    for task in list {
-        print!("{}. {}", i, task);
-
-        i += 1;
-    }
-}
-
-fn add_task(list: &mut Vec<String>) {
-
-    println!("New task:");
-
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("failed to read from stdin");
-
-    list.push(input);
-
-}
-
-fn remove_task(list: &mut Vec<String>) {
+fn promt_input() -> & 'static str {
     
+    // TODO: stert with one element selected and finish the file write and reach functions as well as the add functions :P
+
+    "ASD"
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
 
 fn main() -> Result<(), io::Error>{
 
-    // Fetch list from file
-    let list = read_file().expect("reading file");
+    // Fetch list from file - TODO: Be able to fetch list from file as a &str
+    let list: Vec<&str> = vec!["adfdas", "adfdas", "adfdas", "adfdas", "adfdas"];
 
     // Setup terminal
     enable_raw_mode()?;
@@ -151,9 +162,9 @@ fn main() -> Result<(), io::Error>{
     let app = App{
         items: StatefulList::with_items(list),
         options: vec![
-            "Add list element",
-            "Remove list element",
-            "Exit program",
+            "Press 3 to exit program",
+            "Press 2 to remove selected list element",
+            "Press 1 to add list element",
         ],
     };
 
@@ -171,6 +182,9 @@ fn run_app<B: Backend>(
     tick_rate: Duration,
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
+    
+    let mut sel_list_item = true;
+
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
@@ -178,18 +192,25 @@ fn run_app<B: Backend>(
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+            if let Event::Key(key) = event::read()?{
                 match key.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Left => app.items.unselect(),
+                    KeyCode::Right => sel_list_item = false,
                     KeyCode::Down => app.items.next(),
                     KeyCode::Up => app.items.previous(),
+                    KeyCode::Char('1') => app.items.items.push(promt_input()),
+                    KeyCode::Char('2') => app.items.remove_selected(),
+                    KeyCode::Char('3') => {
+                        return Ok(());
+                    },
                     _ => {}
                 }
+                
             }
         }
     }
 }
+
+// UI
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     // Create two chunks with equal horizontal screen space
@@ -198,7 +219,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
         .split(f.size());
 
-    // Iterate through all elements in the `items` app and append some debug text to it.
+    // Iterate through all elements in the `items` app and parse it into a ListItem vector.
     let items: Vec<ListItem> = app
         .items
         .items
@@ -222,41 +243,28 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     // We can now render the item list
     f.render_stateful_widget(items, chunks[0], &mut app.items.state);
 
+    // Let's do the same for the events.
+    // The options list doesn't have any state and only displays the avaiable options.
+    let events: Vec<ListItem> = app
+        .options
+        .iter()
+        .rev()
+        .map(|i| {
+            let mut lines = vec![Spans::from(*i)];
+            ListItem::new(lines).style(Style::default().fg(Color::Black).bg(Color::White))
+        })
+        .collect();
+
+    let events_list = List::new(events)
+        .block(Block::default().borders(Borders::ALL).title("Actions"));
+
+    f.render_widget(events_list, chunks[1]);
+
+    // Popup
+    let size = f.size();
+
+    let block = Block::default().title("Popup").borders(Borders::ALL);
+    let area = centered_rect(60, 20, size);
+    f.render_widget(Clear, area); //this clears out the background
+    f.render_widget(block, area);
 }
-/*
-fn main() {
- 
-    println!("\n\n {} - This is a simple todo program", "WELCOME".green().bold());
-
-    let mut list = read_file().expect("reading file");
-
-    if list.is_empty() {
-
-        println!("\nThere are no TODO tasks.\n");
-
-    } else {
-
-        println!("\n Current tasks: \n");
-        print_list(&list);
-    }
-
-    let mut choice: u8 = 0;
-
-    while choice != 4 {
-
-        choice = prompt_input();
-
-        match choice{
-            1 => add_task(&mut list),
-            2 => remove_task(&mut list),
-            3 => print_list(&list),
-            4 => match write_file(&list) {
-                Ok(()) => println!("File saved successfully"),
-                Err(e) => eprintln!("{} saving file: {}", "ERROR".red(), e),
-            }
-            _ => println!("No option selected, invalid input"),
-        };
-    }
-    
-}
-*/
