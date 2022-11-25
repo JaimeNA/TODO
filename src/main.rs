@@ -16,7 +16,7 @@ use tui::{
     layout::{Constraint, Corner, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 
@@ -76,26 +76,28 @@ impl<T> StatefulList<T> {
 }
 
 // This struct holds the current state of the app.
-struct App<'a> {
-    items: StatefulList<&'a str>,
-    options: Vec<&'a str>,
+struct App {
+    todo_items: StatefulList<String>,
+    completed_items: StatefulList<String>,
+    input: String,
+    input_mode: bool,
 }
 
 // Utility functions
 
 fn read_file() -> io::Result<Vec<String>> {
+    let mut list: Vec<String> = vec![];
+
     let data = match fs::read_to_string(FILENAME) {
         Ok(v) => v, 
         Err(e) => return Err(e),
     };
 
     if !data.is_empty() {
-        let list: Vec<String> = serde_json::from_str(&data).unwrap();
-
-        return Ok(list.clone());
+        list = serde_json::from_str(&data).unwrap();
     }
 
-    Ok(vec![])
+    Ok(list)
 }
 
 fn write_file(list: &Vec<String>) -> io::Result<()> {
@@ -109,14 +111,17 @@ fn write_file(list: &Vec<String>) -> io::Result<()> {
 
 }
 
-fn promt_input() -> & 'static str {
-    
-    // TODO: stert with one element selected and finish the file write and reach functions as well as the add functions :P
+fn completed_task(app: &mut App) {
+    let i = app.todo_items.state.selected();
 
-    "ASD"
+    if app.todo_items.items.len() != 0 {
+        app.completed_items.items.push(app.todo_items.items[i.unwrap()].clone());
+        app.todo_items.items.remove(i.unwrap());
+        app.todo_items.state.select(Some(0));
+    }
 }
 
-/// helper function to create a centered rect using up certain percentage of the available rect `r`
+// Helper function to create a centered rect using up certain percentage of the available rect `r`
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -146,7 +151,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 fn main() -> Result<(), io::Error>{
 
     // Fetch list from file - TODO: Be able to fetch list from file as a &str
-    let list: Vec<&str> = vec!["adfdas", "adfdas", "adfdas", "adfdas", "adfdas"];
+    let list: Vec<String> = read_file()?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -159,14 +164,14 @@ fn main() -> Result<(), io::Error>{
     
     // Create app and run it
     let tick_rate = Duration::from_millis(250);
-    let app = App{
-        items: StatefulList::with_items(list),
-        options: vec![
-            "Press 3 to exit program",
-            "Press 2 to remove selected list element",
-            "Press 1 to add list element",
-        ],
+    let mut app = App{
+        todo_items: StatefulList::with_items(list),
+        completed_items: StatefulList::with_items(vec![]),
+        input: String::new(),
+        input_mode: false,
     };
+
+    app.todo_items.state.select(Some(0)); // Start with the first element selected
 
     let res = run_app(&mut terminal, app, tick_rate);
 
@@ -193,18 +198,36 @@ fn run_app<B: Backend>(
             .unwrap_or_else(|| Duration::from_secs(0));
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()?{
-                match key.code {
-                    KeyCode::Right => sel_list_item = false,
-                    KeyCode::Down => app.items.next(),
-                    KeyCode::Up => app.items.previous(),
-                    KeyCode::Char('1') => app.items.items.push(promt_input()),
-                    KeyCode::Char('2') => app.items.remove_selected(),
-                    KeyCode::Char('3') => {
-                        return Ok(());
-                    },
-                    _ => {}
+                if app.input_mode {
+                    match key.code {
+                        KeyCode::Char(c) => {
+                            app.input.push(c);
+                        },
+                        KeyCode::Backspace => {
+                            app.input.pop();
+                        },
+                        KeyCode::Enter => {
+                            app.input_mode = false;
+                            app.todo_items.items.push(app.input.clone());
+                            app.input = "".to_string(); // Clean the input
+                        },
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Right => sel_list_item = false,
+                        KeyCode::Down => app.todo_items.next(),
+                        KeyCode::Up => app.todo_items.previous(),
+                        KeyCode::Char('1') => app.input_mode = true,
+                        KeyCode::Char('2') => completed_task(&mut app),
+                        KeyCode::Char('3') => app.todo_items.remove_selected(),
+                        KeyCode::Char('4') => {
+                            write_file(&app.todo_items.items);
+                            return Ok(());
+                        },
+                        _ => {}
+                    }
                 }
-                
             }
         }
     }
@@ -213,26 +236,27 @@ fn run_app<B: Backend>(
 // UI
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
+
     // Create two chunks with equal horizontal screen space
     let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-        .split(f.size());
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+    .split(f.size());
 
     // Iterate through all elements in the `items` app and parse it into a ListItem vector.
-    let items: Vec<ListItem> = app
-        .items
+    let todo_items: Vec<ListItem> = app
+        .todo_items
         .items
         .iter()
         .map(|i| {
-            let mut lines = vec![Spans::from(*i)];
+            let mut lines = i.as_str();
             ListItem::new(lines).style(Style::default().fg(Color::Black).bg(Color::White))
         })
         .collect();
 
     // Create a List from all list items and highlight the currently selected one
-    let items = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("List"))
+    let todo_items = List::new(todo_items)
+        .block(Block::default().borders(Borders::ALL).title("Pending tasks"))
         .highlight_style(
             Style::default()
                 .bg(Color::LightGreen)
@@ -241,30 +265,52 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .highlight_symbol(">> ");
 
     // We can now render the item list
-    f.render_stateful_widget(items, chunks[0], &mut app.items.state);
+    f.render_stateful_widget(todo_items, chunks[0], &mut app.todo_items.state);
 
     // Let's do the same for the events.
-    // The options list doesn't have any state and only displays the avaiable options.
-    let events: Vec<ListItem> = app
-        .options
+    let completed_items: Vec<ListItem> = app
+        .completed_items
+        .items
         .iter()
-        .rev()
         .map(|i| {
-            let mut lines = vec![Spans::from(*i)];
+            let mut lines = i.as_str();
             ListItem::new(lines).style(Style::default().fg(Color::Black).bg(Color::White))
         })
         .collect();
 
-    let events_list = List::new(events)
-        .block(Block::default().borders(Borders::ALL).title("Actions"));
+    // Create a List from all list items and highlight the currently selected one
+    let completed_items = List::new(completed_items)
+        .block(Block::default().borders(Borders::ALL).title("Completed tasks"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
 
-    f.render_widget(events_list, chunks[1]);
+    // We can now render the item list
+    f.render_stateful_widget(completed_items, chunks[1], &mut app.completed_items.state);
 
-    // Popup
-    let size = f.size();
 
-    let block = Block::default().title("Popup").borders(Borders::ALL);
-    let area = centered_rect(60, 20, size);
-    f.render_widget(Clear, area); //this clears out the background
-    f.render_widget(block, area);
+    // Input mode
+    if app.input_mode {
+
+        let size = f.size();
+
+        // Show popup
+        let input = Paragraph::new(app.input.as_ref())
+        .style(Style::default().fg(Color::Yellow))
+        .block(Block::default().borders(Borders::ALL).title("New item:"));
+        let area = centered_rect(60, 20, size);
+        f.render_widget(Clear, area); // This clears out the background
+        f.render_widget(input, area);
+
+        // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
+        f.set_cursor(
+            // Put cursor past the end of the input text
+            area.x + app.input.len() as u16 + 1,
+            // Move one line down, from the border to the input line
+            area.y + 1,
+        );
+    }
 }
