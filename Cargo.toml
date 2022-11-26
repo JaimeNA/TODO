@@ -6,10 +6,6 @@ edition = "2021"
 
 
 [dependencies]
-text-colorizer = "1"
 serde_json = "1.0"
 crossterm = "0.25"
-
-[dependencies.tui]
-version = "0.19"
-features = ["crossterm"]
+tui = "0.19"
